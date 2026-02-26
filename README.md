@@ -190,6 +190,91 @@ You need to build liblsl from source — see the [build liblsl](#build-liblsl-fr
 
 The `muselsl list` command uses a buggy `bluetoothctl` + `pexpect` backend. Use the bleak scan snippet from step 2 instead — it's more reliable.
 
+## Bluetooth Audio Output (ML201 Speaker)
+
+The Pi outputs audio to a Bluetooth speaker (ML201) for EEG sonification via BlueALSA.
+
+### Setup
+
+Install the Bluetooth ALSA backend:
+
+```bash
+sudo apt-get install -y bluez-alsa-utils libasound2-plugin-bluez portaudio19-dev
+```
+
+### Pairing the ML201
+
+```bash
+# Put the ML201 in pairing mode, then:
+bluetoothctl pair C4:A9:B8:27:A4:5A
+bluetoothctl trust C4:A9:B8:27:A4:5A
+bluetoothctl connect C4:A9:B8:27:A4:5A
+```
+
+### How audio routing works
+
+On Raspberry Pi OS, the `bluealsa` system service starts at boot and claims the Bluetooth A2DP (high-quality audio) profile. PipeWire cannot compete for this endpoint, so we route audio through BlueALSA instead.
+
+The chain is: `sounddevice → PortAudio → ALSA → BlueALSA → BlueZ A2DP → ML201`
+
+Two config files make this work:
+
+1. **`~/.config/wireplumber/wireplumber.conf.d/disable-seat-monitoring.conf`** — disables PipeWire's Bluetooth monitor so it doesn't fight with BlueALSA:
+
+```
+wireplumber.profiles = {
+  main = {
+    monitor.bluez = disabled
+    monitor.bluez-midi = disabled
+    support.logind = disabled
+  }
+}
+```
+
+2. **`~/.asoundrc`** — routes the default ALSA device to BlueALSA A2DP:
+
+```
+pcm.!default {
+    type plug
+    slave.pcm {
+        type bluealsa
+        device "C4:A9:B8:27:A4:5A"
+        profile "a2dp"
+    }
+}
+
+ctl.!default {
+    type bluealsa
+}
+```
+
+After changing these, restart WirePlumber: `systemctl --user restart wireplumber`
+
+### Test tone
+
+```bash
+# Quick test with aplay:
+aplay -D bluealsa:DEV=C4:A9:B8:27:A4:5A /tmp/test_tone.wav
+
+# Test the Python audio path:
+source env/bin/activate
+python scripts/test_audio.py
+```
+
+### Troubleshooting audio
+
+**No sound from ML201:**
+1. Check it's connected: `bluetoothctl info C4:A9:B8:27:A4:5A | grep Connected`
+2. Check BlueALSA sees it: `bluealsa-aplay -L` — should list the ML201
+3. If not listed, disconnect and reconnect: `bluetoothctl disconnect C4:A9:B8:27:A4:5A && bluetoothctl connect C4:A9:B8:27:A4:5A`
+4. Verify `bluealsa` service is running: `systemctl status bluealsa`
+
+**PipeWire grabbing Bluetooth instead of BlueALSA:**
+Make sure WirePlumber's Bluetooth monitor is disabled (see config above) and restart: `systemctl --user restart wireplumber`
+
+**Hearing "press Control+Alt..." on connect:**
+This is the Raspberry Pi desktop accessibility prompt playing through the speaker when Bluetooth connects. It's harmless — it stops after the announcement.
+
 ## EEG Channels
 
 | Channel | Location | Description |

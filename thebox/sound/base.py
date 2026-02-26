@@ -24,8 +24,8 @@ class SoundParameters:
     # Derived parameters
     amplitude: float = 0.3       # driven by alpha power
     base_frequency: float = 220.0  # driven by beta/alpha ratio (110-880 Hz)
-    brightness: float = 0.5      # driven by theta (lower = warmer)
-    noise_gain: float = 0.1      # driven by gamma
+    brightness: float = 0.1      # driven by theta (lower = warmer, less saw)
+    noise_gain: float = 0.05     # driven by gamma
 
     # Event triggers (decay over time)
     blink_trigger: float = 0.0   # 0-1, decays ~200ms

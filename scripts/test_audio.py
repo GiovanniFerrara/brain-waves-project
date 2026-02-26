@@ -20,7 +20,7 @@ def main():
     print("You should hear a tone sweep with noise texture.\n")
 
     output = AudioOutput(sample_rate=SAMPLE_RATE, block_size=BLOCK_SIZE)
-    mixer = Mixer(master_volume=0.5)
+    mixer = Mixer(master_volume=0.15)
     mixer.add_source(OscillatorSource(SAMPLE_RATE), gain=0.7)
     mixer.add_source(NoiseSource(SAMPLE_RATE), gain=0.3)
 

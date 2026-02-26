@@ -58,8 +58,8 @@ class Pipeline:
         # Sound
         self.params = SoundParameters()
         self.mixer = Mixer(master_volume=c.master_volume)
-        self.mixer.add_source(OscillatorSource(c.audio_sample_rate), gain=0.7)
-        self.mixer.add_source(NoiseSource(c.audio_sample_rate), gain=0.3)
+        self.mixer.add_source(OscillatorSource(c.audio_sample_rate), gain=0.85)
+        self.mixer.add_source(NoiseSource(c.audio_sample_rate), gain=0.1)
         self.output = AudioOutput(
             sample_rate=c.audio_sample_rate,
             block_size=c.audio_block_size,
@@ -113,7 +113,7 @@ class Pipeline:
         ) * (freq_hi - freq_lo)
 
         self.params.brightness = np.clip(1.0 - self.params.theta * 2.0, 0.0, 1.0)
-        self.params.noise_gain = np.clip(self.params.gamma * 3.0, 0.0, 1.0)
+        self.params.noise_gain = np.clip(self.params.gamma * 1.0, 0.0, 0.3)
 
     def _decay_triggers(self, dt: float) -> None:
         """Decay event triggers over time."""

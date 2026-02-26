@@ -35,9 +35,9 @@ class TheBoxConfig:
     audio_sample_rate: int = 44100
     audio_block_size: int = 2205        # ~50ms at 44100 Hz
     audio_channels: int = 1
-    base_frequency_range: tuple[float, float] = (110.0, 880.0)
+    base_frequency_range: tuple[float, float] = (130.0, 520.0)
     blink_decay: float = 0.2            # seconds
     clench_decay: float = 0.3           # seconds
 
     # Output
-    master_volume: float = 0.5
+    master_volume: float = 0.15
