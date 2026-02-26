@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: thebox
+Version: 0.1.0
+Summary: EEG-to-sound engine for Muse 2
+Requires-Python: >=3.11
+Requires-Dist: bleak>=0.21
+Requires-Dist: numpy>=1.26
+Requires-Dist: scipy>=1.12
+Requires-Dist: sounddevice>=0.4
+Requires-Dist: matplotlib>=3.8
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"

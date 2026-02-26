@@ -1,0 +1,8 @@
+bleak>=0.21
+numpy>=1.26
+scipy>=1.12
+sounddevice>=0.4
+matplotlib>=3.8
+
+[dev]
+pytest>=8.0
