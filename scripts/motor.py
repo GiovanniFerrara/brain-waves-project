@@ -3,12 +3,12 @@
 
 Usage:
     python motor.py --test                # quick connection test
-    python motor.py -d 1d,2l,5d,7l
-    python motor.py -d "1d, 2l, 5d, 7l" -s 80
-    python motor.py -d 3l,3d --rpwm 18 --lpwm 19
+    python motor.py -d 1r,2l,5r,7l
+    python motor.py -d "1r, 2l, 5r, 7l" -s 80
+    python motor.py -d 3l,3r --rpwm 18 --lpwm 19
 
 Each token: <seconds><direction>
-    d = destra (right / forward)
+    r = right (forward)
     l = left (reverse)
 
 Default wiring (matches Pi 5 + BTS7960):
@@ -33,9 +33,9 @@ def parse_sequence(raw: str) -> list[tuple[float, str]]:
     tokens = [t.strip() for t in raw.split(",") if t.strip()]
     seq = []
     for tok in tokens:
-        m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([dlDL])", tok)
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([rlRL])", tok)
         if not m:
-            print(f"ERROR: bad token '{tok}' — expected e.g. 3d or 2.5l")
+            print(f"ERROR: bad token '{tok}' — expected e.g. 3r or 2.5l")
             sys.exit(1)
         secs = float(m.group(1))
         direction = m.group(2).lower()
@@ -109,11 +109,11 @@ def run(seq, rpwm_pin, lpwm_pin, speed):
 
     try:
         for secs, direction in seq:
-            label = "RIGHT" if direction == "d" else "LEFT"
+            label = "RIGHT" if direction == "r" else "LEFT"
             print(f"  {label} for {secs}s at {speed}%")
 
             stop()
-            if direction == "d":
+            if direction == "r":
                 rpwm.value = duty
             else:
                 lpwm.value = duty
@@ -133,7 +133,7 @@ def run(seq, rpwm_pin, lpwm_pin, speed):
 def main():
     ap = argparse.ArgumentParser(description="BTS7960 motor sequence driver")
     ap.add_argument("-d", "--drive",
-                    help="Comma-separated sequence, e.g. 1d,2l,5d,7l")
+                    help="Comma-separated sequence, e.g. 1r,2l,5r,7l")
     ap.add_argument("-t", "--test", action="store_true",
                     help="Run connection test (short pulse both directions)")
     ap.add_argument("-s", "--speed", type=int, default=100,
