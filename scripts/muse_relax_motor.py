@@ -123,18 +123,39 @@ def emergency_stop():
     _rpwm = _lpwm = None
 
 
+_log_path = None
+
+
+def _generate_plot():
+    """Auto-generate session plot on exit."""
+    if _log_path and os.path.exists(_log_path):
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "plot_session",
+                os.path.join(os.path.dirname(__file__), "plot_session.py"),
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.plot_session(_log_path)
+        except Exception as e:
+            print(f"Plot generation failed: {e}")
+
+
 atexit.register(emergency_stop)
+atexit.register(_generate_plot)
 signal.signal(signal.SIGTERM, lambda *_: (emergency_stop(), exit(0)))
 
 
 # --- Main ---
 async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
-    global _rpwm, _lpwm
+    global _rpwm, _lpwm, _log_path
 
     # Setup CSV log with timestamp
     os.makedirs("output", exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = f"output/relax_motor_{ts}.csv"
+    _log_path = log_path
     log_file = open(log_path, "w", newline="")
     log_writer = csv.writer(log_file)
     log_writer.writerow([
@@ -200,8 +221,8 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
             print(f"Baseline θ/β ratio: {baseline:.2f}")
 
             print(f"\nMotor speed reflects mental activity (max {max_speed}%).")
-            print("  Alert, eyes open  → faster")
             print("  Relaxed, eyes closed → slower")
+            print("  Alert, eyes open  → faster")
             print("  Press Ctrl+C to stop\n")
 
             smoothed = 0.5
@@ -211,6 +232,8 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
             prev_ratio = None
             stale_count = 0
             STALE_LIMIT = 15  # ~1.5s of identical readings = disconnected
+            artf_streak = 0
+            ARTF_BLINK_MAX = 10  # only reject artifacts < ~1s (blinks)
 
             try:
                 while True:
@@ -227,7 +250,15 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
                     # Check frontal channels for artifact rejection
                     af7 = get_window("AF7", 0.5)
                     af8 = get_window("AF8", 0.5)
-                    artf = is_artifact(af7, af8)
+                    artf_raw = is_artifact(af7, af8)
+
+                    # Only reject brief artifacts (blinks <1s).
+                    # Prolonged frontal noise = bad electrode contact, not blinks.
+                    if artf_raw:
+                        artf_streak += 1
+                    else:
+                        artf_streak = 0
+                    artf = artf_raw and artf_streak <= ARTF_BLINK_MAX
 
                     theta = band_power(avg_tp, 4, 8)
                     beta = band_power(avg_tp, 13, 30)
@@ -249,7 +280,7 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
                     sample_count += 1
 
                     if artf:
-                        # Skip artifact — hold current motor speed
+                        # Skip brief blink artifact — hold current motor speed
                         artifact_count += 1
                         r_min = r_max = pct = 0.0
                     else:
@@ -272,8 +303,8 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
                         # Smooth — relaxation changes slowly, so use heavy smoothing
                         smoothed = 0.15 * pct + 0.85 * smoothed
 
-                    # Invert: relaxed=slow, active=fast
-                    motor_duty = (1.0 - smoothed) * duty_max
+                    # Direct: relaxed (high smoothed) = slow, active (low smoothed) = fast
+                    motor_duty = smoothed * duty_max
                     set_motor(motor_duty)
 
                     elapsed = time.monotonic() - start_time
@@ -318,20 +349,6 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
             emergency_stop()
             log_file.close()
             print(f"Log saved: {log_path}")
-
-            # Auto-generate session plot
-            try:
-                import importlib.util
-                spec = importlib.util.spec_from_file_location(
-                    "plot_session",
-                    os.path.join(os.path.dirname(__file__), "plot_session.py"),
-                )
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                mod.plot_session(log_path)
-            except Exception as e:
-                print(f"Plot generation failed: {e}")
-
             print("Done!")
             return
 
