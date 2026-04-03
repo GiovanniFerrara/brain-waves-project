@@ -36,6 +36,8 @@ def plot_session(csv_path: str):
         beta = df.get("beta", df.get("beta_tp", np.zeros(len(t)))).values
         alpha = df.get("alpha", df.get("alpha_tp", np.zeros(len(t)))).values
 
+    delta = df["delta_tp"].values if "delta_tp" in df.columns else None
+
     ratio = df["ratio"].values
     motor = df["motor_pct"].values
     smoothed_relax = df["smoothed"].values
@@ -63,6 +65,8 @@ def plot_session(csv_path: str):
     theta = theta[:cutoff]
     beta = beta[:cutoff]
     alpha = alpha[:cutoff]
+    if delta is not None:
+        delta = delta[:cutoff]
     ratio = ratio[:cutoff]
     motor = motor[:cutoff]
     smoothed_relax = smoothed_relax[:cutoff]
@@ -74,6 +78,9 @@ def plot_session(csv_path: str):
 
     # 1. Band powers
     ax = axes[0]
+    if delta is not None:
+        ax.plot(t, delta, alpha=0.3, color="blue", linewidth=0.5)
+        ax.plot(t, smooth(delta), color="blue", linewidth=2, label="Delta (1-4 Hz)")
     ax.plot(t, theta, alpha=0.3, color="purple", linewidth=0.5)
     ax.plot(t, smooth(theta), color="purple", linewidth=2, label="Theta (4-8 Hz)")
     ax.plot(t, beta, alpha=0.3, color="orange", linewidth=0.5)

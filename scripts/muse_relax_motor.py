@@ -92,6 +92,7 @@ def make_callback(ch: str):
 def band_power(data: np.ndarray, low: float, high: float) -> float:
     if len(data) < SAMPLE_RATE:
         return 0.0
+    data = data - np.mean(data)
     nyq = SAMPLE_RATE / 2
     lo = max(low / nyq, 0.001)
     hi = min(high / nyq, 0.999)
@@ -126,6 +127,9 @@ def emergency_stop():
 _log_path = None
 
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 def _generate_plot():
     """Auto-generate session plot on exit."""
     if _log_path and os.path.exists(_log_path):
@@ -133,7 +137,7 @@ def _generate_plot():
             import importlib.util
             spec = importlib.util.spec_from_file_location(
                 "plot_session",
-                os.path.join(os.path.dirname(__file__), "plot_session.py"),
+                os.path.join(_SCRIPT_DIR, "plot_session.py"),
             )
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
@@ -143,7 +147,6 @@ def _generate_plot():
 
 
 atexit.register(emergency_stop)
-atexit.register(_generate_plot)
 signal.signal(signal.SIGTERM, lambda *_: (emergency_stop(), exit(0)))
 
 
@@ -159,7 +162,7 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
     log_file = open(log_path, "w", newline="")
     log_writer = csv.writer(log_file)
     log_writer.writerow([
-        "time_s", "theta_tp", "beta_tp", "alpha_tp",
+        "time_s", "delta_tp", "theta_tp", "alpha_tp", "beta_tp",
         "artifact", "ratio", "ratio_p10", "ratio_p90",
         "pct", "smoothed", "motor_pct",
     ])
@@ -260,9 +263,10 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
                         artf_streak = 0
                     artf = artf_raw and artf_streak <= ARTF_BLINK_MAX
 
+                    delta = band_power(avg_tp, 1, 4)
                     theta = band_power(avg_tp, 4, 8)
-                    beta = band_power(avg_tp, 13, 30)
                     alpha = band_power(avg_tp, 8, 13)
+                    beta = band_power(avg_tp, 13, 30)
 
                     ratio = theta / max(beta, 0.1)
 
@@ -311,7 +315,7 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
 
                     log_writer.writerow([
                         f"{elapsed:.2f}",
-                        f"{theta:.2f}", f"{beta:.2f}", f"{alpha:.2f}",
+                        f"{delta:.2f}", f"{theta:.2f}", f"{alpha:.2f}", f"{beta:.2f}",
                         "1" if artf else "0",
                         f"{ratio:.3f}",
                         f"{r_min:.3f}" if not artf else "",
@@ -325,7 +329,8 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
                     bar = "█" * int(smoothed * 20) + "░" * (20 - int(smoothed * 20))
                     art_str = " ARTIFACT" if artf else ""
                     print(
-                        f"  θ={theta:5.1f} β={beta:5.1f} α={alpha:5.1f} "
+                        f"  {elapsed:6.1f}s "
+                        f"δ={delta:5.1f} θ={theta:5.1f} α={alpha:5.1f} β={beta:5.1f} "
                         f"θ/β={ratio:.2f} "
                         f"relax={smoothed:.2f} "
                         f"[{bar}] "
@@ -336,7 +341,7 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
 
                     await asyncio.sleep(0.1)
 
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, asyncio.CancelledError):
                 pct_art = artifact_count / max(sample_count, 1) * 100
                 print(f"\n\nStopping. {sample_count} samples, {artifact_count} artifacts ({pct_art:.0f}%)")
 
@@ -345,10 +350,14 @@ async def run(rpwm_pin: int, lpwm_pin: int, max_speed: float, direction: str):
                 await client.write_gatt_char(CONTROL_UUID, CMD_HALT)
             except Exception:
                 pass
-            await client.disconnect()
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
             emergency_stop()
             log_file.close()
             print(f"Log saved: {log_path}")
+            _generate_plot()
             print("Done!")
             return
 
@@ -370,7 +379,10 @@ def main():
     ap.add_argument("--max-speed", type=int, default=80, help="Max motor speed %% (default: 80)")
     ap.add_argument("--direction", choices=["r", "l"], default="r", help="Motor direction (default: r)")
     args = ap.parse_args()
-    asyncio.run(run(args.rpwm, args.lpwm, args.max_speed, args.direction))
+    try:
+        asyncio.run(run(args.rpwm, args.lpwm, args.max_speed, args.direction))
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
