@@ -119,6 +119,58 @@ class TestReport:
             x = rng.standard_normal(n) * 5 + _sine(10, 20, amp=15)
             rec.append(ch, x, np.ones(n, bool))
         report = SessionReport(rec)
-        assert "alpha peak 10.0 Hz" in report.summary()
+        assert report.summary().count("alpha: 10.0 Hz") == 4
         paths = report.save_plots(tmp_path / "r")
         assert all(p.stat().st_size > 10_000 for p in paths)
+
+
+class TestArtifacts:
+    def test_spike_masked_with_margin(self):
+        from thebox.eeg.quality import artifact_mask
+        rng = np.random.default_rng(2)
+        x = rng.standard_normal((1, 10 * FS)) * 10
+        x[0, 5 * FS] = -90  # swallow-sized: under the old 150 µV p-p limit
+        mask = artifact_mask(x)[0]
+        assert mask[5 * FS] and mask[5 * FS - FS // 5] and mask[5 * FS + FS // 5]
+        assert mask.mean() < 0.1
+
+    def test_limit_adapts_to_channel_noise(self):
+        from thebox.eeg.quality import artifact_mask
+        rng = np.random.default_rng(3)
+        quiet = rng.standard_normal(10 * FS) * 5
+        noisy = rng.standard_normal(10 * FS) * 12
+        quiet[FS], noisy[FS] = 50, 50
+        mask = artifact_mask(np.stack([quiet, noisy]))
+        assert mask[0, FS] and not mask[1, FS]
+
+
+class TestFeatures:
+    def _psd(self, alpha_amp: float):
+        from scipy.signal import welch
+        rng = np.random.default_rng(4)
+        # Pink-ish background: integrated white noise, then an alpha sine
+        x = np.cumsum(rng.standard_normal(60 * FS))
+        x = clean(x) + _sine(10, 60, amp=alpha_amp)
+        return welch(x, fs=FS, nperseg=2 * FS)
+
+    def test_alpha_peak_found_above_background(self):
+        from thebox.eeg.features import alpha_peak
+        peak = alpha_peak(*self._psd(alpha_amp=5))
+        assert peak is not None and peak.freq == 10.0
+
+    def test_no_alpha_peak_on_pure_background(self):
+        from thebox.eeg.features import alpha_peak
+        assert alpha_peak(*self._psd(alpha_amp=0)) is None
+
+    def test_smooth_powers_skips_bad_segments(self):
+        from thebox.eeg.features import smooth_powers
+        powers = np.array([1.0, 1.0, 100.0, 1.0, 1.0])[:, None]
+        good = np.array([True, True, False, True, True])
+        out = smooth_powers(powers, good, n=3, min_good=2)[:, 0]
+        assert np.isnan(out[0])
+        np.testing.assert_allclose(out[1:], 1.0)
+
+    def test_db_change_is_zero_at_median(self):
+        from thebox.eeg.features import db_change
+        p = np.array([[1.0], [2.0], [4.0]])
+        np.testing.assert_allclose(db_change(p)[:, 0], [-3.0103, 0, 3.0103], atol=1e-3)

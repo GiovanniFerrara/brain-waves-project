@@ -11,6 +11,7 @@ EEG_UUIDS = {
 }
 
 AUX_UUID = "273e0007-4c4d-454d-96be-f03bac821358"
+TELEMETRY_UUID = "273e000b-4c4d-454d-96be-f03bac821358"
 
 CHANNEL_NAMES = list(EEG_UUIDS.keys())
 
@@ -50,3 +51,8 @@ def decode_packet(packet: bytes | bytearray) -> list[float]:
             raw = (bit_buffer >> bit_count) & 0xFFF
             samples.append((raw - ADC_OFFSET) * SCALE_FACTOR)
     return samples
+
+
+def parse_battery(packet: bytes | bytearray) -> float:
+    """Battery percentage from a telemetry packet (bytes 2-3, 1/512 %)."""
+    return int.from_bytes(packet[2:4], "big") / 512

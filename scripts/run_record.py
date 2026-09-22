@@ -13,7 +13,7 @@ from datetime import datetime
 from thebox.ble.connection import MuseConnection
 from thebox.config import TheBoxConfig
 from thebox.eeg.recording import Recording
-from thebox.report import SessionReport
+from thebox.report import WIN_SECONDS, SessionReport
 
 DEFAULT_SECONDS = 60
 
@@ -59,12 +59,14 @@ async def record(config: TheBoxConfig, seconds: int) -> Recording:
 if __name__ == "__main__":
     seconds = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SECONDS
     rec = asyncio.run(record(TheBoxConfig(), seconds))
-    if rec.n_samples < rec.sample_rate * 4:
-        sys.exit("Too little data to analyse.")
+    if rec.n_samples == 0:
+        sys.exit("No data received.")
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = rec.save(f"output/rec_{stamp}.npz")
-    print(f"\nSaved {path}")
+    print(f"\nSaved {path} ({rec.duration:.1f}s)")
+    if rec.duration < 2 * WIN_SECONDS:
+        sys.exit("Too short to analyse.")
 
     report = SessionReport(rec)
     print(report.summary())

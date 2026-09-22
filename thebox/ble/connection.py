@@ -11,7 +11,15 @@ import numpy as np
 from bleak import BleakClient, BleakScanner
 
 from .aligner import PacketAligner
-from .protocol import CMD_HALT, CMD_RESUME, CONTROL_UUID, EEG_UUIDS, parse_packet
+from .protocol import (
+    CMD_HALT,
+    CMD_RESUME,
+    CONTROL_UUID,
+    EEG_UUIDS,
+    TELEMETRY_UUID,
+    parse_battery,
+    parse_packet,
+)
 
 # callback(channel, samples_µV, valid) — ``valid`` is False for samples
 # interpolated over lost packets.
@@ -55,6 +63,7 @@ class MuseConnection:
         self._client: BleakClient | None = None
         self._device: Any = None
         self._closing = False
+        self.battery: float | None = None  # %, updated by telemetry every few s
 
     @property
     def connected(self) -> bool:
@@ -77,6 +86,12 @@ class MuseConnection:
             for cb in self._callbacks:
                 cb(channel_name, samples, valid)
         return callback
+
+    def _on_telemetry(self, _sender: Any, data: bytearray) -> None:
+        first = self.battery is None
+        self.battery = parse_battery(data)
+        if first:
+            print(f"Battery: {self.battery:.0f}%")
 
     def _handle_disconnect(self, _client: BleakClient) -> None:
         if self._closing:
@@ -129,6 +144,7 @@ class MuseConnection:
                     await self._client.start_notify(
                         uuid, self._make_notify_callback(name)
                     )
+                await self._client.start_notify(TELEMETRY_UUID, self._on_telemetry)
 
                 await self._client.write_gatt_char(CONTROL_UUID, CMD_RESUME)
                 return
