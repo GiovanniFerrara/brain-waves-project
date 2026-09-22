@@ -52,7 +52,7 @@ async def main():
             for detector in detectors:
                 for event in detector.detect(stream, now):
                     bus.publish(event)
-            await asyncio.sleep(config.process_interval)
+            await asyncio.sleep(0.05)
     finally:
         await conn.disconnect()
         print("Stopped.")

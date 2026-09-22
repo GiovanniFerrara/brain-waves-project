@@ -6,3 +6,4 @@ output/
 .venv/
 .pytest_cache/
 *.egg-info/
+samples/*.wav
