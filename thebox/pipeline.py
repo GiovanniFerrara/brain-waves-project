@@ -68,11 +68,6 @@ class Pipeline:
 
         self._running = False
 
-    def _eeg_callback(
-        self, channel: str, samples: list[float], timestamp: float
-    ) -> None:
-        """Called by MuseConnection for each decoded EEG packet."""
-        self.stream.append(channel, samples)
 
     def _handle_event(self, event: Event) -> None:
         """Update SoundParameters in response to detected events."""
@@ -130,7 +125,7 @@ class Pipeline:
 
     async def start(self) -> None:
         """Connect to Muse and run the processing loop until cancelled."""
-        self.connection.on_eeg(self._eeg_callback)
+        self.connection.on_eeg(self.stream.append)
         self.bus.subscribe(None, self._handle_event)
 
         await self.connection.connect()

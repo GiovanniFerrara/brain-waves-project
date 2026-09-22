@@ -32,7 +32,7 @@ async def main():
     bus.subscribe(None, print_event)
 
     conn = MuseConnection(config.device_name)
-    conn.on_eeg(lambda ch, samples, ts: stream.append(ch, samples))
+    conn.on_eeg(stream.append)
 
     await conn.connect()
     print("\nListening for events... Press Ctrl+C to stop.\n")

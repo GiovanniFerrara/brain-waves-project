@@ -1,11 +1,17 @@
-"""EEG filters — offline bandpass and real-time streaming filter."""
+"""EEG filters — offline zero-phase filters and a real-time streaming filter."""
 
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import butter, filtfilt, sosfilt, sosfilt_zi
+from scipy.signal import butter, iirnotch, sosfiltfilt, sosfilt, sosfilt_zi, tf2sos
 
 from ..ble.protocol import SAMPLE_RATE
+
+MAINS_FREQUENCY = 50.0  # Hz — Europe; 60 in the Americas
+
+
+def _band_sos(low: float, high: float, order: int, sample_rate: float) -> np.ndarray:
+    return butter(order, [low, high], btype="band", fs=sample_rate, output="sos")
 
 
 def bandpass(
@@ -13,22 +19,48 @@ def bandpass(
     low: float,
     high: float,
     order: int = 4,
-    sample_rate: int = SAMPLE_RATE,
+    sample_rate: float = SAMPLE_RATE,
 ) -> np.ndarray:
-    """Apply a zero-phase Butterworth bandpass filter (offline use).
+    """Zero-phase Butterworth bandpass (offline: needs the whole window).
 
-    Uses filtfilt for zero phase distortion — requires the full signal.
+    Second-order sections keep narrow low bands (e.g. delta at 256 Hz)
+    numerically stable, where the b/a form can blow up.
     """
-    nyq = sample_rate / 2
-    b, a = butter(order, [low / nyq, high / nyq], btype="band")
-    return filtfilt(b, a, data)
+    sos = _band_sos(low, high, order, sample_rate)
+    return sosfiltfilt(sos, data, axis=-1)
+
+
+def notch(
+    data: np.ndarray,
+    freq: float = MAINS_FREQUENCY,
+    quality: float = 30.0,
+    sample_rate: float = SAMPLE_RATE,
+) -> np.ndarray:
+    """Zero-phase notch removing mains hum at ``freq``."""
+    b, a = iirnotch(freq, quality, fs=sample_rate)
+    return sosfiltfilt(tf2sos(b, a), data, axis=-1)
+
+
+def clean(
+    data: np.ndarray,
+    low: float = 1.0,
+    high: float = 45.0,
+    mains: float | None = MAINS_FREQUENCY,
+    sample_rate: float = SAMPLE_RATE,
+) -> np.ndarray:
+    """Standard EEG cleanup: remove offset, mains hum, and out-of-band content."""
+    out = np.asarray(data, dtype=np.float64)
+    out = out - np.mean(out, axis=-1, keepdims=True)
+    if mains is not None and mains < sample_rate / 2:
+        out = notch(out, mains, sample_rate=sample_rate)
+    return bandpass(out, low, high, sample_rate=sample_rate)
 
 
 class StreamingBandpass:
-    """Causal IIR bandpass filter that processes chunks incrementally.
+    """Causal IIR bandpass that processes consecutive chunks incrementally.
 
-    Uses second-order sections (sos) with sosfilt for numerical stability.
-    Maintains filter state across calls so it can process real-time chunks.
+    Feed it each *new* chunk exactly once — state carries across calls, so
+    re-feeding overlapping windows corrupts the output.
 
     Usage::
 
@@ -42,13 +74,10 @@ class StreamingBandpass:
         low: float,
         high: float,
         order: int = 4,
-        sample_rate: int = SAMPLE_RATE,
+        sample_rate: float = SAMPLE_RATE,
     ):
-        nyq = sample_rate / 2
-        self.sos = butter(order, [low / nyq, high / nyq], btype="band", output="sos")
-        self._zi = sosfilt_zi(self.sos)
-        # Scale initial conditions to zero (no assumed DC offset)
-        self._zi = self._zi * 0.0
+        self.sos = _band_sos(low, high, order, sample_rate)
+        self.reset()
 
     def process(self, chunk: np.ndarray) -> np.ndarray:
         """Filter a chunk of samples, maintaining state across calls."""
@@ -56,5 +85,5 @@ class StreamingBandpass:
         return filtered
 
     def reset(self) -> None:
-        """Reset filter state."""
-        self._zi = sosfilt_zi(self.sos) * 0.0
+        """Reset filter state (zero initial conditions)."""
+        self._zi = np.zeros_like(sosfilt_zi(self.sos))

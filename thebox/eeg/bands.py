@@ -61,7 +61,8 @@ def compute_band_powers(
 
     powers = {}
     for band in bands:
-        mask = (freqs >= band.low) & (freqs <= band.high)
+        # Half-open so a bin on a shared edge (e.g. 8 Hz) is counted once
+        mask = (freqs >= band.low) & (freqs < band.high)
         powers[band.name] = float(np.trapezoid(psd[mask], freqs[mask]))
 
     return powers
@@ -73,3 +74,20 @@ def normalize_band_powers(powers: dict[str, float]) -> dict[str, float]:
     if total == 0:
         return {k: 0.0 for k in powers}
     return {k: v / total for k, v in powers.items()}
+
+
+def epoch_band_powers(
+    epochs: np.ndarray,
+    sample_rate: float = SAMPLE_RATE,
+    bands: list[FrequencyBand] | None = None,
+) -> np.ndarray:
+    """Band power of every epoch: (..., n_epochs, n_samples) → (..., n_epochs, n_bands).
+
+    Each epoch gets one Hann-windowed periodogram; power is integrated per band.
+    """
+    if bands is None:
+        bands = ALL_BANDS
+    freqs, psd = welch(epochs, fs=sample_rate, nperseg=epochs.shape[-1], axis=-1)
+    df = freqs[1] - freqs[0]
+    out = [psd[..., (freqs >= b.low) & (freqs < b.high)].sum(axis=-1) * df for b in bands]
+    return np.stack(out, axis=-1)

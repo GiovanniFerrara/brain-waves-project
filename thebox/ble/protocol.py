@@ -21,15 +21,24 @@ CMD_HALT = bytearray([0x02, 0x68, 0x0A])    # 'h' — stop streaming
 # Muse 2 EEG parameters
 SAMPLE_RATE = 256
 SAMPLES_PER_PACKET = 12
-SCALE_FACTOR = 0.48828125  # 2000 / 4096
+SCALE_FACTOR = 0.48828125  # 2000 µV / 4096 counts
+ADC_OFFSET = 0x800         # 12-bit ADC is unsigned; 2048 is 0 µV
+SEQ_MODULO = 1 << 16       # packet counter is a wrapping uint16
 
 
-def decode_packet(packet: bytearray) -> list[float]:
-    """Decode a 20-byte Muse EEG packet into 12 µV samples.
+def parse_packet(packet: bytes | bytearray) -> tuple[int, list[float]]:
+    """Split a 20-byte Muse EEG packet into (sequence number, 12 µV samples).
 
-    The packet has a 2-byte header followed by 18 bytes of 12-bit samples
-    packed MSB-first.
+    Bytes 0-1 are a big-endian packet counter shared by all EEG channels;
+    gaps in it are packets lost over BLE. Bytes 2-19 hold twelve 12-bit
+    samples packed MSB-first.
     """
+    seq = (packet[0] << 8) | packet[1]
+    return seq, decode_packet(packet)
+
+
+def decode_packet(packet: bytes | bytearray) -> list[float]:
+    """Decode the 12 samples of a Muse EEG packet to µV, centred on zero."""
     bit_buffer = 0
     bit_count = 0
     samples = []
@@ -39,5 +48,5 @@ def decode_packet(packet: bytearray) -> list[float]:
         while bit_count >= 12:
             bit_count -= 12
             raw = (bit_buffer >> bit_count) & 0xFFF
-            samples.append(raw * SCALE_FACTOR)
+            samples.append((raw - ADC_OFFSET) * SCALE_FACTOR)
     return samples
