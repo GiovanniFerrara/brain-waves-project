@@ -107,6 +107,22 @@ class TestLiveFeatures:
         _feed(f, blink)
         assert list(f.events) == ["blink"]
 
+    def test_clench_on_temporal_emg(self):
+        f = LiveFeatures(calibration=10)
+        _feed(f, _eeg(15))
+        clench = _eeg(1, seed=4)
+        rng = np.random.default_rng(5)
+        emg = rng.standard_normal(FS) * 20  # broadband muscle burst ~2.5x the noise
+        clench[0] += emg
+        clench[3] += emg
+        _feed(f, clench)
+        assert "clench" in f.events
+
+    def test_no_events_on_calm_signal(self):
+        f = LiveFeatures(calibration=10)
+        _feed(f, _eeg(25))
+        assert not f.events
+
     def test_artifacts_do_not_move_levels(self):
         f = LiveFeatures(calibration=10)
         _feed(f, _eeg(15))

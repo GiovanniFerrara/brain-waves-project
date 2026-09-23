@@ -79,8 +79,10 @@ class LiveFeatures:
         notch = tf2sos(*iirnotch(MAINS_FREQUENCY, 30, fs=fs))
         band = butter(4, [1.0, 45.0], btype="band", fs=fs, output="sos")
         self._clean_filter = _CausalFilter(np.vstack([notch, band]), self.channels)
-        self._emg_filter = _CausalFilter(
-            butter(4, [20.0, 45.0], btype="band", fs=fs, output="sos"), self.channels)
+        # Notch here too: a causal 45 Hz edge lets mains hum through, and poorly
+        # seated electrodes pick up far more hum than muscle
+        emg = butter(4, [20.0, 45.0], btype="band", fs=fs, output="sos")
+        self._emg_filter = _CausalFilter(np.vstack([notch, emg]), self.channels)
         self.clean = EEGStream(duration=12.0)
         self.emg = EEGStream(duration=4.0)
         self._received = {ch: 0 for ch in self.channels}
@@ -193,8 +195,12 @@ class LiveFeatures:
         # Jaw clench: muscle (20-45 Hz) burst on the temporal channels
         if t - self._last_event["clench"] > 0.8 and {"TP9", "TP10"} <= idx.keys():
             rms = self._emg_rms(window)
-            ratios = [rms[idx[ch]] / max(self._emg_baseline[idx[ch]], 1.0) for ch in ("TP9", "TP10")]
-            if min(ratios) > 3.0:
+            ratio = {ch: rms[i] / max(self._emg_baseline[i], 1.0) for ch, i in idx.items()}
+            temporal = [ratio["TP9"], ratio["TP10"]]
+            frontal = np.mean([ratio.get("AF7", 1.0), ratio.get("AF8", 1.0)])
+            # A clench at least doubles EMG behind both ears (the jaw muscles sit
+            # there), more than on the forehead — blinks are the other way round
+            if np.mean(temporal) > 2.0 and min(temporal) > 1.5 and np.mean(temporal) > 1.2 * frontal:
                 self._fire("clench", t)
 
     def _fire(self, name: str, t: float) -> None:
