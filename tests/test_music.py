@@ -97,6 +97,17 @@ class TestLiveFeatures:
         states = _feed(f, _eeg(8, alpha=25, seed=1))  # eyes closed
         assert states[-1].levels["Alpha"] > 0.8
 
+    def test_alpha_follows_the_channel_that_sees_it(self):
+        """Eyes-closed alpha on one electrode only must still move the level."""
+        f = LiveFeatures(calibration=10)
+        _feed(f, _eeg(15, alpha=3))
+        closed = _eeg(20, alpha=0, seed=6)
+        t = np.arange(closed.shape[1]) / FS
+        closed[0] += 25 * np.sin(2 * np.pi * 10 * t)  # TP9 only
+        state = _feed(f, closed)[-1]
+        assert state.alpha_weights["TP9"] > 0.6
+        assert state.levels["Alpha"] > 0.8
+
     def test_blink_on_both_frontal_channels(self):
         f = LiveFeatures(calibration=10)
         _feed(f, _eeg(15))

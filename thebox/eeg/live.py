@@ -12,10 +12,11 @@ from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.signal import butter, iirnotch, sosfilt, sosfilt_zi, tf2sos
+from scipy.signal import butter, iirnotch, sosfilt, sosfilt_zi, tf2sos, welch
 
 from ..ble.protocol import CHANNEL_NAMES, SAMPLE_RATE
 from .bands import ALL_BANDS, epoch_band_powers
+from .features import ALPHA_SEARCH, above_background_db
 from .filters import MAINS_FREQUENCY
 from .quality import robust_sigma
 from .stream import EEGStream
@@ -34,6 +35,7 @@ class BrainState:
     levels: dict[str, float] = field(default_factory=lambda: {b: 0.5 for b in BAND_NAMES})
     quality: float = 0.0                       # share of channels currently clean
     asymmetry: float = 0.0                     # alpha, right minus left, -1…1
+    alpha_weights: dict[str, float] = field(default_factory=dict)  # who alpha listens to
     channel_good: dict[str, bool] = field(default_factory=dict)
 
 
@@ -83,12 +85,19 @@ class LiveFeatures:
         # seated electrodes pick up far more hum than muscle
         emg = butter(4, [20.0, 45.0], btype="band", fs=fs, output="sos")
         self._emg_filter = _CausalFilter(np.vstack([notch, emg]), self.channels)
+        # Blinks are slow (<10 Hz) deflections; muscle is fast. Detecting them in
+        # separate bands stops a jaw clench from registering as a blink.
+        self._slow_filter = _CausalFilter(
+            butter(2, [1.0, 10.0], btype="band", fs=fs, output="sos"), self.channels)
         self.clean = EEGStream(duration=12.0)
         self.emg = EEGStream(duration=4.0)
+        self.slow = EEGStream(duration=4.0)
         self._received = {ch: 0 for ch in self.channels}
 
         n_ch, n_b = len(self.channels), len(BAND_NAMES)
         self._power = np.full((n_ch, n_b), np.nan)     # smoothed, linear µV²
+        self._psd: np.ndarray | None = None             # (ch, freq), slow average
+        self._psd_freqs: np.ndarray | None = None
         self._good_ema = np.zeros(n_ch)
         self._sigma = np.full(n_ch, np.nan)
         self._calib_db: list[np.ndarray] = []           # (ch, band) snapshots
@@ -99,6 +108,7 @@ class LiveFeatures:
         self._emg_baseline: np.ndarray | None = None
         self._last_time = 0.0
         self._last_event = {"blink": -1e9, "clench": -1e9}
+        self._clench_hold = 0
         self.events: deque[str] = deque()
         self.state = BrainState()
 
@@ -110,6 +120,7 @@ class LiveFeatures:
         samples = np.asarray(samples, dtype=np.float64)
         self.clean.append(channel, self._clean_filter(channel, samples), valid)
         self.emg.append(channel, self._emg_filter(channel, samples), valid)
+        self.slow.append(channel, self._slow_filter(channel, samples), valid)
         self._received[channel] += len(samples)
 
     # --- per-update analysis ---
@@ -140,6 +151,7 @@ class LiveFeatures:
             if ok:
                 p = epoch_band_powers(seg[None], self.fs)[0]
                 self._power[i] = p if np.isnan(self._power[i]).any() else self._power[i] + a * (p - self._power[i])
+                self._update_psd(i, seg, dt)
         self._good_ema += (1 - np.exp(-dt / 2.0)) * (good - self._good_ema)
 
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -148,6 +160,35 @@ class LiveFeatures:
         self._detect_events(t)
         self.state = self._make_state(t, db)
         return self.state
+
+    def _update_psd(self, i: int, seg: np.ndarray, dt: float) -> None:
+        """Slow (~15 s) average spectrum per channel, to see whose alpha is clearest."""
+        freqs, p = welch(seg, fs=self.fs, nperseg=len(seg))
+        if self._psd is None:
+            self._psd_freqs = freqs
+            self._psd = np.full((len(self.channels), len(freqs)), np.nan)
+        if np.isnan(self._psd[i]).any():
+            self._psd[i] = p
+        else:
+            self._psd[i] += (1 - np.exp(-dt / 15.0)) * (p - self._psd[i])
+
+    def alpha_weights(self) -> np.ndarray:
+        """How much each channel should count for alpha.
+
+        The eyes-closed alpha rise can be strong on one electrode and absent on
+        the others (fit, hair, head shape). Weighting by how far each channel's
+        alpha peak stands above its 1/f background lets the music follow the
+        channel that actually sees it, instead of averaging it away.
+        """
+        w = np.ones(len(self.channels))
+        if self._psd is None:
+            return w
+        m = (self._psd_freqs >= ALPHA_SEARCH[0]) & (self._psd_freqs <= ALPHA_SEARCH[1])
+        for i, p in enumerate(self._psd):
+            if np.isfinite(p).all() and (p > 0).all():
+                prominence = above_background_db(self._psd_freqs[1:], p[1:])[m[1:]].max()
+                w[i] = (np.clip(prominence, 0, 12) + 0.5) ** 2
+        return w
 
     def _calibrate(self, t: float, dt: float, db: np.ndarray, good: np.ndarray) -> None:
         if self.baseline is None:
@@ -188,19 +229,24 @@ class LiveFeatures:
         window = 0.35
         # Blink: a big deflection on BOTH frontal channels at once
         if t - self._last_event["blink"] > 0.6 and {"AF7", "AF8"} <= idx.keys():
-            peaks = [np.abs(self.clean.get_window(ch, window)).max(initial=0) for ch in ("AF7", "AF8")]
+            peaks = [np.abs(self.slow.get_window(ch, window)).max(initial=0) for ch in ("AF7", "AF8")]
             limits = [max(self._limit(idx[ch]), 60.0) for ch in ("AF7", "AF8")]
             if all(p > lim for p, lim in zip(peaks, limits)):
                 self._fire("blink", t)
-        # Jaw clench: muscle (20-45 Hz) burst on the temporal channels
-        if t - self._last_event["clench"] > 0.8 and {"TP9", "TP10"} <= idx.keys():
+        # Jaw clench: a sustained, two-sided muscle (20-45 Hz) burst. Measured on
+        # a Muse 2: real clenches raise EMG >2x on BOTH temporal channels about
+        # equally (and on the forehead too); swallows and electrode rubs hit one
+        # side; blinks are dominated by the forehead.
+        if {"TP9", "TP10"} <= idx.keys():
             rms = self._emg_rms(window)
             ratio = {ch: rms[i] / max(self._emg_baseline[i], 1.0) for ch, i in idx.items()}
-            temporal = [ratio["TP9"], ratio["TP10"]]
+            tp = np.array([ratio["TP9"], ratio["TP10"]])
             frontal = np.mean([ratio.get("AF7", 1.0), ratio.get("AF8", 1.0)])
-            # A clench at least doubles EMG behind both ears (the jaw muscles sit
-            # there), more than on the forehead — blinks are the other way round
-            if np.mean(temporal) > 2.0 and min(temporal) > 1.5 and np.mean(temporal) > 1.2 * frontal:
+            burst = (tp.min() > 2.0 and tp.min() / tp.max() >= 0.5
+                     and frontal < 1.5 * tp.mean()
+                     and t - self._last_event["blink"] > 1.0)
+            self._clench_hold = self._clench_hold + 1 if burst else 0
+            if self._clench_hold >= 2 and t - self._last_event["clench"] > 1.5:
                 self._fire("clench", t)
 
     def _fire(self, name: str, t: float) -> None:
@@ -224,11 +270,16 @@ class LiveFeatures:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN bands
             mean_z = np.nanmean(z_good, axis=0)
+        alpha = BAND_NAMES.index("Alpha")
+        weights = np.where(np.isfinite(z_good[:, alpha]), self.alpha_weights(), 0.0)
+        if weights.sum() > 0:
+            mean_z[alpha] = float(np.nansum(z_good[:, alpha] * weights) / weights.sum())
+            state.alpha_weights = {ch: round(float(w / weights.sum()), 2)
+                                   for ch, w in zip(self.channels, weights)}
         state.levels = {
             name: float(np.clip(0.5 + mz / 4, 0, 1)) if np.isfinite(mz) else 0.5
             for name, mz in zip(BAND_NAMES, mean_z)
         }
-        alpha = BAND_NAMES.index("Alpha")
         side = lambda chans: np.nanmean([z_good[self.channels.index(c), alpha]
                                          for c in chans if c in self.channels] or [np.nan])
         with warnings.catch_warnings():
